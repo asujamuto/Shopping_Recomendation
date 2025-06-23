@@ -8,18 +8,21 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # --- Load data ---
-train_df = pd.read_csv("../data/train.csv")
+train_df = pd.read_csv("../data/v1/train.csv")
+test_df = pd.read_csv("../data/v1/test.csv")
 meta_df = pd.read_csv("../data/item_metadata_filtered.csv")
 with open("../data/id_mappings.json") as f:
     id_map = json.load(f)
 
-# user id and asin to int id mapping
+# User id and asin to int id mapping
 asin_to_id = {asin: int(item_id) for asin, item_id in id_map["item_mapping"].items()} # asin (str) → item_id (int)
 item_id_to_asin = {int(item_id): asin for item_id, asin in id_map["item_reverse_mapping"].items()} # item_id (int) → asin (str)
 
+# Create a lookup dictionary for true items from the test set
+true_items_map = pd.Series(test_df.item_id.values, index=test_df.user_id).to_dict()
+
 all_categories = sorted(meta_df["main_category"].dropna().unique().tolist())
 category_options = ["Any"] + all_categories
-
 
 # Preprocess metadata
 meta_df["title"] = meta_df["title"].fillna("")
@@ -61,6 +64,27 @@ def recommend_for_user(user_id, top_k=10):
     seen_items = set(train_df[train_df["user_id"] == user_id]["item_id"])
     recs = [i for i in scores.argsort()[::-1] if i not in seen_items]
     return recs[:top_k]
+
+# --- Average Precision Function ---
+def average_precision_at_k(recommendations, true_item_id, k=10):
+    """
+    Calculates Average Precision at k (AP@k) for a single user.
+    In a leave-one-out scenario, this is 1/rank if the true item is in
+    the top k recommendations, and 0 otherwise.
+
+    Args:
+        recommendations (list): A list of recommended item_ids.
+        true_item_id (int): The single true item_id for the user from the test set.
+        k (int): The cutoff for the recommendation list.
+
+    Returns:
+        float: The AP@k score.
+    """
+    if true_item_id in recommendations[:k]:
+        # Find the rank (position) of the true item, adding 1 for 1-based ranking
+        rank = recommendations[:k].index(true_item_id) + 1
+        return 1.0 / rank
+    return 0.0
 
 # --- Display helpers ---
 def get_product_card(item_id):
@@ -156,10 +180,15 @@ def run_dashboard(min_interactions, max_interactions, category_dropdown, categor
     history_items = train_df[train_df["user_id"] == user_id].sort_values("timestamp", ascending=False)["item_id"].tolist()
     recommended_items = recommend_for_user(user_id)
 
+    true_item = true_items_map.get(user_id)
+    ap_score = "N/A (User not in test set)"
+    if true_item:
+        ap_score = average_precision_at_k(recommended_items, true_item, k=10)
+
     history_cards = build_cards(history_items)
     recommendation_cards = build_cards(recommended_items)
 
-    return f"{user_label}\n✅ Selected User ID: {user_id}", history_cards, recommendation_cards
+    return f"{user_label}\n✅ Selected User ID: {user_id}", history_cards, recommendation_cards, f"{ap_score:.4f}"
 
 # --- Gradio UI ---
 with gr.Blocks() as demo:
@@ -173,6 +202,8 @@ with gr.Blocks() as demo:
         run_button = gr.Button("Pick Random User")
 
     user_out = gr.Textbox(label="User ID")
+    ap_score_out = gr.Textbox(label="Average Precision @ 10"
+                                    "")
     with gr.Column():
         gr.Markdown("### 🔁 Past Interactions")
         hist_gallery = gr.Gallery(label="History", columns=5, height="auto")
@@ -182,6 +213,6 @@ with gr.Blocks() as demo:
 
     run_button.click(run_dashboard,
                      inputs=[min_input, max_input, category_dropdown, category_min_count],
-                     outputs=[user_out, hist_gallery, rec_gallery])
+                     outputs=[user_out, hist_gallery, rec_gallery, ap_score_out])
 
 demo.launch()
