@@ -48,6 +48,27 @@ texts = [
 vectorizer = TfidfVectorizer(max_features=10_000)
 tfidf_matrix = vectorizer.fit_transform(texts)
 
+def mean_average_precision_at_10(test_df, recommend_func, k=10):
+    """
+    Calculates MAP@10 for all users in the test set.
+
+    Args:
+        test_df (pd.DataFrame): Test set with columns 'user_id' and 'item_id'.
+        recommend_func (callable): Function that takes user_id and returns a list of recommended item_ids.
+        k (int): Number of recommendations to consider.
+
+    Returns:
+        float: MAP@10 score.
+    """
+    ap_scores = []
+    for _, row in test_df.iterrows():
+        user_id = row["user_id"]
+        true_item_id = row["item_id"]
+        recommendations = recommend_func(user_id, top_k=k)
+        ap = average_precision_at_k(recommendations, true_item_id, k)
+        ap_scores.append(ap)
+    return np.mean(ap_scores) if ap_scores else 0.0
+
 # --- Recommender ---
 def build_user_profile(user_id):
     user_ratings = train_df[train_df["user_id"] == user_id]
